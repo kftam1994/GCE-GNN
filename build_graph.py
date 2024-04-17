@@ -2,7 +2,7 @@ import pickle
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='diginetica', help='diginetica/Tmall/Nowplaying')
+parser.add_argument('--dataset', default='amazonM2', help='diginetica/Tmall/Nowplaying/amazonM2')
 parser.add_argument('--sample_num', type=int, default=12)
 opt = parser.parse_args()
 
@@ -17,6 +17,8 @@ elif dataset == "Tmall":
     num = 40728
 elif dataset == "Nowplaying":
     num = 60417
+elif dataset == "amazonM2":
+    num = 607048+1
 else:
     num = 3
 

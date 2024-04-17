@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 
 class CombineGraph(Module):
-    def __init__(self, opt, num_node, adj_all, num):
+    def __init__(self, opt, num_node, adj_all, num, product_data):
         super(CombineGraph, self).__init__()
         self.opt = opt
 
@@ -34,17 +34,28 @@ class CombineGraph(Module):
                 agg = GlobalAggregator(self.dim, opt.dropout_gcn, act=torch.tanh)
             self.add_module('agg_gcn_{}'.format(i), agg)
             self.global_agg.append(agg)
-
+        
         # Item representation & Position representation
         self.embedding = nn.Embedding(num_node, self.dim)
         self.pos_embedding = nn.Embedding(200, self.dim)
-
+        self.orig_dim = self.dim
+        self.embedding_hidden_size_requires_grad = self.dim
+        self.dim += self.dim
+        
+        # Text embedding
+        assert self.num_node==product_data.get_shape()[0]+1
+        add_embed_size = product_data.get_shape()[1]
+        self.add_node_embedding = nn.Embedding(self.num_node, add_embed_size) # https://discuss.pytorch.org/t/can-we-use-pre-trained-word-embeddings-for-weight-initialization-in-nn-embedding/1222/3
+        self.add_node_embedding.weight = nn.Parameter(torch.concatenate((trans_to_cuda(torch.zeros((1,add_embed_size))),product_data.get_product_features())))
+        self.add_node_embedding.weight.requires_grad = False
+        self.dim += add_embed_size
+        
         # Parameters
-        self.w_1 = nn.Parameter(torch.Tensor(2 * self.dim, self.dim))
-        self.w_2 = nn.Parameter(torch.Tensor(self.dim, 1))
-        self.glu1 = nn.Linear(self.dim, self.dim)
-        self.glu2 = nn.Linear(self.dim, self.dim, bias=False)
-        self.linear_transform = nn.Linear(self.dim, self.dim, bias=False)
+        self.w_1 = nn.Parameter(torch.Tensor(self.dim, self.orig_dim))
+        self.w_2 = nn.Parameter(torch.Tensor(self.orig_dim, 1))
+        self.glu1 = nn.Linear(self.orig_dim, self.orig_dim)
+        self.glu2 = nn.Linear(self.orig_dim, self.orig_dim, bias=False)
+        # self.linear_transform = nn.Linear(self.dim, self.dim, bias=False)
 
         self.leakyrelu = nn.LeakyReLU(opt.alpha)
         self.loss_function = nn.CrossEntropyLoss()
@@ -54,7 +65,8 @@ class CombineGraph(Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        stdv = 1.0 / math.sqrt(self.dim)
+        # stdv = 1.0 / math.sqrt(self.dim)
+        stdv = 1.0 / math.sqrt(self.embedding_hidden_size_requires_grad)
         for weight in self.parameters():
             weight.data.uniform_(-stdv, stdv)
 
@@ -73,10 +85,13 @@ class CombineGraph(Module):
         len = hidden.shape[1]
         pos_emb = self.pos_embedding.weight[:len]
         pos_emb = pos_emb.unsqueeze(0).repeat(batch_size, 1, 1)
+        
+        add_emb = self.add_node_embedding.weight[:len]
+        add_emb = add_emb.unsqueeze(0).repeat(batch_size, 1, 1)
 
         hs = torch.sum(hidden * mask, -2) / torch.sum(mask, 1)
         hs = hs.unsqueeze(-2).repeat(1, len, 1)
-        nh = torch.matmul(torch.cat([pos_emb, hidden], -1), self.w_1)
+        nh = torch.matmul(torch.cat([add_emb, pos_emb, hidden], -1), self.w_1)
         nh = torch.tanh(nh)
         nh = torch.sigmoid(self.glu1(nh) + self.glu2(hs))
         beta = torch.matmul(nh, self.w_2)
@@ -124,7 +139,7 @@ class CombineGraph(Module):
 
         for n_hop in range(self.hop):
             entity_vectors_next_iter = []
-            shape = [batch_size, -1, self.sample_num, self.dim]
+            shape = [batch_size, -1, self.sample_num, self.orig_dim]
             for hop in range(self.hop - n_hop):
                 aggregator = self.global_agg[n_hop]
                 vector = aggregator(self_vectors=entity_vectors[hop],
@@ -136,7 +151,7 @@ class CombineGraph(Module):
                 entity_vectors_next_iter.append(vector)
             entity_vectors = entity_vectors_next_iter
 
-        h_global = entity_vectors[0].view(batch_size, seqs_len, self.dim)
+        h_global = entity_vectors[0].view(batch_size, seqs_len, self.orig_dim)
 
         # combine
         h_local = F.dropout(h_local, self.dropout_local, training=self.training)
@@ -178,7 +193,7 @@ def train_test(model, train_data, test_data):
     print('start training: ', datetime.datetime.now())
     model.train()
     total_loss = 0.0
-    train_loader = torch.utils.data.DataLoader(train_data, num_workers=4, batch_size=model.batch_size,
+    train_loader = torch.utils.data.DataLoader(train_data, batch_size=model.batch_size,
                                                shuffle=True, pin_memory=True)
     for data in tqdm(train_loader):
         model.optimizer.zero_grad()
@@ -193,7 +208,7 @@ def train_test(model, train_data, test_data):
 
     print('start predicting: ', datetime.datetime.now())
     model.eval()
-    test_loader = torch.utils.data.DataLoader(test_data, num_workers=4, batch_size=model.batch_size,
+    test_loader = torch.utils.data.DataLoader(test_data, batch_size=model.batch_size,
                                               shuffle=False, pin_memory=True)
     result = []
     hit, mrr = [], []

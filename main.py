@@ -15,7 +15,7 @@ def init_seed(seed=None):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='diginetica', help='diginetica/Nowplaying/Tmall')
+parser.add_argument('--dataset', default='amazonM2', help='diginetica/Nowplaying/Tmall/amazonM2')
 parser.add_argument('--hiddenSize', type=int, default=100)
 parser.add_argument('--epoch', type=int, default=20)
 parser.add_argument('--activate', type=str, default='relu')
@@ -31,7 +31,7 @@ parser.add_argument('--dropout_gcn', type=float, default=0, help='Dropout rate.'
 parser.add_argument('--dropout_local', type=float, default=0, help='Dropout rate.')     # [0, 0.5]
 parser.add_argument('--dropout_global', type=float, default=0.5, help='Dropout rate.')
 parser.add_argument('--validation', action='store_true', help='validation')
-parser.add_argument('--valid_portion', type=float, default=0.1, help='split the portion')
+parser.add_argument('--valid_portion', type=float, default=0.2, help='split the portion')
 parser.add_argument('--alpha', type=float, default=0.2, help='Alpha for the leaky_relu.')
 parser.add_argument('--patience', type=int, default=3)
 
@@ -56,15 +56,21 @@ def main():
         opt.n_iter = 1
         opt.dropout_gcn = 0.6
         opt.dropout_local = 0.5
+    elif opt.dataset == 'amazonM2':
+        num_node = 607048+1
+        opt.n_iter = 1
+        opt.dropout_gcn = 0.0
+        opt.dropout_local = 0.0
     else:
         num_node = 310
-
-    train_data = pickle.load(open('datasets/' + opt.dataset + '/train.txt', 'rb'))
+    product_data = pickle.load(open('datasets/' + opt.dataset + '/filtered_products_with_features.txt', 'rb'))
+    product_data = ProductData(product_data)
+    train_data = pickle.load(open('datasets/' + opt.dataset + '/sample_train.txt', 'rb'))
     if opt.validation:
         train_data, valid_data = split_validation(train_data, opt.valid_portion)
         test_data = valid_data
     else:
-        test_data = pickle.load(open('datasets/' + opt.dataset + '/test.txt', 'rb'))
+        test_data = pickle.load(open('datasets/' + opt.dataset + '/sample_test.txt', 'rb'))
 
     adj = pickle.load(open('datasets/' + opt.dataset + '/adj_' + str(opt.n_sample_all) + '.pkl', 'rb'))
     num = pickle.load(open('datasets/' + opt.dataset + '/num_' + str(opt.n_sample_all) + '.pkl', 'rb'))
@@ -72,7 +78,7 @@ def main():
     test_data = Data(test_data)
 
     adj, num = handle_adj(adj, num_node, opt.n_sample_all, num)
-    model = trans_to_cuda(CombineGraph(opt, num_node, adj, num))
+    model = trans_to_cuda(CombineGraph(opt, num_node, adj, num, product_data))
 
     print(opt)
     start = time.time()
